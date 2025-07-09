@@ -1,123 +1,126 @@
-const WebSocket = require('ws');
-const fs = require('fs');
-const http = require('http');
-const path = require('path');
+const WebSocket = require("ws");
+const express = require("express");
 
-const WS_URL = 'wss://mynygwais.hytsocesk.com/websocket';
-const accessToken = '1-17d1b52f17591f581fc8cd9102a28647';
-const agentId = '1';
+const app = express();
+const PORT = process.env.PORT || 8080;
 
-const INIT_PACKETS = [
-  [1, 'MiniGame', '', '', { agentId, accessToken, reconnect: false }],
-  [6, 'MiniGame', 'taixiuPlugin', { cmd: 1005 }],
-  [6, 'MiniGame', 'taixiuKCBPlugin', { cmd: 2000 }],
-  [6, 'MiniGame', 'lobbyPlugin', { cmd: 10001 }]
-];
-
-const HEADERS = {
-  'User-Agent': 'Mozilla/5.0',
-  Origin: 'https://i.hit.club',
-  Host: 'mynygwais.hytsocesk.com'
+// Kết quả hiện tại
+let currentResult = {
+  id: "binhtool90",
+  time: null,
+  sid: null,
+  ket_qua: null,
+  md5: null,
+  pattern: ""
 };
 
-let lastResult = null;
-let nextSession = null;
+// Lịch sử kết quả dạng T/X
+let historyResults = [];
 
-function logTime() {
-  return new Date().toLocaleTimeString('vi-VN', { hour12: false });
+const WS_URL = "wss://mynygwais.hytsocesk.com/websocket";
+const accessToken = "1-17d1b52f17591f581fc8cd9102a28647";
+const agentId = "1";
+
+const INIT_PACKETS = [
+  [1, "MiniGame", "", "", { agentId, accessToken, reconnect: false }],
+  [6, "MiniGame", "taixiuPlugin", { cmd: 1005 }],
+  [6, "MiniGame", "taixiuKCBPlugin", { cmd: 2000 }],
+  [6, "MiniGame", "lobbyPlugin", { cmd: 10001 }],
+];
+
+function timestamp() {
+  return new Date().toLocaleTimeString("vi-VN", { hour12: false });
 }
 
-function saveDataToFile() {
-  const data = {
-    id: 'binhtool90',
-    phien_truoc: lastResult,
-    phien_ke_tiep: nextSession
-  };
-  fs.writeFileSync('data.json', JSON.stringify(data, null, 2));
-  console.log(`💾 [${logTime()}] Đã ghi data.json`);
-}
+function connectWebSocket() {
+  const ws = new WebSocket(WS_URL, {
+    headers: {
+      "User-Agent": "Mozilla/5.0",
+      Origin: "https://i.hit.club",
+      Host: "mynygwais.hytsocesk.com"
+    }
+  });
 
-function connectWS() {
-  const ws = new WebSocket(WS_URL, { headers: HEADERS });
-
-  ws.on('open', () => {
-    console.log(`[✅ ${logTime()}] Kết nối WS thành công`);
+  ws.on("open", () => {
+    console.log(`[✅ ${timestamp()}] Kết nối WebSocket`);
     INIT_PACKETS.forEach((packet, i) => {
       ws.send(JSON.stringify(packet));
       setTimeout(() => {
-        ws.send(JSON.stringify(['7', 'MiniGame', '1', i + 1]));
-      }, 400 * (i + 1));
+        ws.send(JSON.stringify(["7", "MiniGame", "1", i + 1]));
+      }, 300);
     });
 
     let counter = INIT_PACKETS.length + 1;
     setInterval(() => {
-      ws.send(JSON.stringify(['7', 'MiniGame', '1', counter++]));
+      ws.send(JSON.stringify(["7", "MiniGame", "1", counter++]));
     }, 10000);
   });
 
-  ws.on('message', (msg) => {
+  ws.on("message", (data) => {
     try {
-      const data = JSON.parse(msg);
-      if (Array.isArray(data) && data.length > 1) {
-        const payload = data[1];
+      const message = JSON.parse(data);
+      if (Array.isArray(message) && message.length > 1) {
+        const payload = message[1];
 
-        // MD5 phiên kế tiếp
-        if (payload?.cmd === 1015 && payload?.d?.cmd === 2005) {
+        // Nhận MD5 trước kết quả
+        if (payload?.cmd === 1015 && payload.d?.cmd === 2005) {
           const { sid, md5 } = payload.d;
-          nextSession = { sid, md5 };
-          console.log(`[🧩 ${logTime()}] Phiên kế tiếp: ${sid} ➜ MD5: ${md5}`);
-          saveDataToFile();
+          currentResult.sid = sid;
+          currentResult.md5 = md5;
         }
 
-        // Kết quả phiên trước
+        // Nhận kết quả
         if (payload?.cmd === 2006) {
           const { sid, d1, d2, d3, md5 } = payload;
-          if ([sid, d1, d2, d3].every(n => n !== undefined)) {
+          if ([d1, d2, d3].every(Number.isInteger)) {
             const tong = d1 + d2 + d3;
-            const ket_qua = tong >= 11 ? 'Tài' : 'Xỉu';
-            lastResult = {
-              sid,
-              ket_qua: `${d1}-${d2}-${d3} = ${tong} (${ket_qua})`,
-              md5
-            };
-            console.log(`[🎲 ${logTime()}] Phiên trước: ${sid} ➜ ${d1}-${d2}-${d3} = ${tong} (${ket_qua})`);
-            console.log(`           ➜ MD5: ${md5}`);
-            saveDataToFile();
+            const result = tong >= 11 ? "Tài" : "Xỉu";
+
+            currentResult.sid = sid;
+            currentResult.ket_qua = `${d1}-${d2}-${d3} = ${tong} (${result})`;
+            currentResult.md5 = md5;
+            currentResult.time = timestamp();
+
+            // Cập nhật pattern
+            const patternChar = result === "Tài" ? "T" : "X";
+            historyResults.push(patternChar);
+            if (historyResults.length > 10) {
+              historyResults.shift(); // giữ tối đa 10 kết quả
+            }
+            currentResult.pattern = historyResults.join("");
+
+            // In ra console
+            console.log(`[🎲 ${timestamp()}] Phiên ${sid} ➜ ${currentResult.ket_qua}`);
+            console.log(`           ➜ MD5: ${md5} (by binhtool90)`);
           }
         }
       }
-    } catch (e) {
-      console.log(`[‼️ ${logTime()}] Lỗi xử lý tin:`, e.message);
+    } catch (err) {
+      console.error(`[‼️ ${timestamp()}] Lỗi message:`, err);
     }
   });
 
-  ws.on('close', (code, reason) => {
-    console.log(`[❌ ${logTime()}] Mất kết nối: ${code} | ${reason}`);
-    setTimeout(connectWS, 5000);
+  ws.on("close", () => {
+    console.log(`[❌ ${timestamp()}] Mất kết nối. Đang reconnect...`);
+    setTimeout(connectWebSocket, 5000);
   });
 
-  ws.on('error', (err) => {
-    console.log(`[‼️ ${logTime()}] WS lỗi:`, err.message);
+  ws.on("error", (err) => {
+    console.error(`[‼️ ${timestamp()}] Lỗi WebSocket:`, err);
   });
 }
 
-// HTTP server cho /taixiu
-http.createServer((req, res) => {
-  if (req.url === '/taixiu') {
-    fs.readFile(path.join(__dirname, 'data.json'), (err, data) => {
-      if (err) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ error: 'Không thể đọc data.json' }));
-      }
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(data);
-    });
-  } else {
-    res.writeHead(404);
-    res.end('404 Not Found');
-  }
-}).listen(process.env.PORT || 8080, () => {
-  console.log(`[🌐] Server đang chạy tại http://localhost:${process.env.PORT || 8080}/taixiu`);
+// ✅ API JSON
+app.get("/taixiu", (req, res) => {
+  res.setHeader("Content-Type", "application/json");
+  res.send(JSON.stringify(currentResult, null, 2));
 });
 
-connectWS();
+app.get("/", (req, res) => {
+  res.send("🎲 Tool Tài Xỉu WebSocket - by binhtool90 đang chạy...");
+});
+
+app.listen(PORT, () => {
+  console.log(`[🌐] API server chạy tại http://localhost:${PORT}`);
+  connectWebSocket();
+});
