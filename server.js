@@ -1,7 +1,7 @@
 const WebSocket = require("ws");
 const express = require("express");
 const app = express();
-const PORT = 3000;
+const PORT = 5050;
 
 const WS_URL = "wss://mynygwais.hytsocesk.com/websocket";
 const accessToken = "1-17d1b52f17591f581fc8cd9102a28647";
