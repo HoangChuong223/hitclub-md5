@@ -1,124 +1,123 @@
 const WebSocket = require('ws');
-const express = require('express');
+const fs = require('fs');
+const http = require('http');
+const path = require('path');
 
 const WS_URL = 'wss://mynygwais.hytsocesk.com/websocket';
-const ID = 'binhtool90';
-const PORT = process.env.PORT || 8080;
+const accessToken = '1-17d1b52f17591f581fc8cd9102a28647';
+const agentId = '1';
 
-const app = express();
-let phienTruoc = null;
-let phienTiep = null;
-let history = [];
+const INIT_PACKETS = [
+  [1, 'MiniGame', '', '', { agentId, accessToken, reconnect: false }],
+  [6, 'MiniGame', 'taixiuPlugin', { cmd: 1005 }],
+  [6, 'MiniGame', 'taixiuKCBPlugin', { cmd: 2000 }],
+  [6, 'MiniGame', 'lobbyPlugin', { cmd: 10001 }]
+];
 
-let ws;
+const HEADERS = {
+  'User-Agent': 'Mozilla/5.0',
+  Origin: 'https://i.hit.club',
+  Host: 'mynygwais.hytsocesk.com'
+};
 
-function connectWebSocket() {
-    ws = new WebSocket(WS_URL, {
-        headers: {
-            origin: 'https://i.hit.club/?a=hitclub',
-            'user-agent': 'okhttp/4.9.0'
-        }
-    });
+let lastResult = null;
+let nextSession = null;
 
-    ws.on('open', () => {
-        console.log('[+] Đã kết nối WebSocket');
-
-        const authPayload = [
-            1,
-            "MiniGame",
-            "",
-            "",
-            {
-                agentId: "1",
-                accessToken: "1-24a346d09712f8df079e14a2ed487ce4",
-                reconnect: false
-            }
-        ];
-        ws.send(JSON.stringify(authPayload));
-        console.log('[>] Đã gửi xác thực');
-
-        setTimeout(() => {
-            const cmd2001 = [
-                6,
-                "MiniGame",
-                "taixiuKCBPlugin",
-                { cmd: 2001 }
-            ];
-            ws.send(JSON.stringify(cmd2001));
-            console.log('[>] Đã gửi cmd 2001');
-        }, 1000);
-    });
-
-    ws.on('message', (data) => {
-        try {
-            const parsed = JSON.parse(data);
-            if (Array.isArray(parsed) && parsed[0] === 5 && typeof parsed[1] === 'object') {
-                const d = parsed[1].d;
-                if (!d) return;
-
-                const cmd = d.cmd;
-                const sid = d.sid;
-                const md5 = d.md5;
-
-                if (cmd === 2006 && d.d1 !== undefined && d.d2 !== undefined && d.d3 !== undefined) {
-                    const total = d.d1 + d.d2 + d.d3;
-                    const result = total >= 11 ? 'Tài' : 'Xỉu';
-
-                    phienTruoc = {
-                        sid,
-                        ket_qua: `${d.d1}-${d.d2}-${d.d3} = ${total} (${result})`,
-                        md5
-                    };
-
-                    history.push(result === 'Tài' ? 'T' : 'X');
-                    if (history.length > 10) history.shift();
-
-                    console.log('[✅] Phiên trước:', phienTruoc);
-                }
-
-                if (cmd === 2005) {
-                    phienTiep = {
-                        sid,
-                        md5,
-                        thong_bao: "Chưa có kết quả"
-                    };
-                    console.log('[⏭️] Phiên kế tiếp:', phienTiep);
-                }
-            }
-        } catch (e) {
-            console.log('[!] Lỗi:', e.message);
-        }
-    });
-
-    ws.on('close', (code, reason) => {
-        console.log(`[x] WebSocket đóng | Code: ${code} | Reason: ${reason}`);
-        reconnect();
-    });
-
-    ws.on('error', (err) => {
-        console.log('[!] WebSocket lỗi:', err.message);
-        reconnect();
-    });
+function logTime() {
+  return new Date().toLocaleTimeString('vi-VN', { hour12: false });
 }
 
-function reconnect() {
-    console.log('[🔁] Kết nối lại sau 5s...');
-    setTimeout(connectWebSocket, 5000);
+function saveDataToFile() {
+  const data = {
+    id: 'binhtool90',
+    phien_truoc: lastResult,
+    phien_ke_tiep: nextSession
+  };
+  fs.writeFileSync('data.json', JSON.stringify(data, null, 2));
+  console.log(`💾 [${logTime()}] Đã ghi data.json`);
 }
 
-connectWebSocket();
+function connectWS() {
+  const ws = new WebSocket(WS_URL, { headers: HEADERS });
 
-app.get('/', (req, res) => {
-    res.json({
-        id: ID,
-        phien_truoc: phienTruoc,
-        phien_ke_tiep: {
-            ...phienTiep,
-            Pattern: history.join('').toLowerCase() // T -> t, X -> x
-        }
+  ws.on('open', () => {
+    console.log(`[✅ ${logTime()}] Kết nối WS thành công`);
+    INIT_PACKETS.forEach((packet, i) => {
+      ws.send(JSON.stringify(packet));
+      setTimeout(() => {
+        ws.send(JSON.stringify(['7', 'MiniGame', '1', i + 1]));
+      }, 400 * (i + 1));
     });
+
+    let counter = INIT_PACKETS.length + 1;
+    setInterval(() => {
+      ws.send(JSON.stringify(['7', 'MiniGame', '1', counter++]));
+    }, 10000);
+  });
+
+  ws.on('message', (msg) => {
+    try {
+      const data = JSON.parse(msg);
+      if (Array.isArray(data) && data.length > 1) {
+        const payload = data[1];
+
+        // MD5 phiên kế tiếp
+        if (payload?.cmd === 1015 && payload?.d?.cmd === 2005) {
+          const { sid, md5 } = payload.d;
+          nextSession = { sid, md5 };
+          console.log(`[🧩 ${logTime()}] Phiên kế tiếp: ${sid} ➜ MD5: ${md5}`);
+          saveDataToFile();
+        }
+
+        // Kết quả phiên trước
+        if (payload?.cmd === 2006) {
+          const { sid, d1, d2, d3, md5 } = payload;
+          if ([sid, d1, d2, d3].every(n => n !== undefined)) {
+            const tong = d1 + d2 + d3;
+            const ket_qua = tong >= 11 ? 'Tài' : 'Xỉu';
+            lastResult = {
+              sid,
+              ket_qua: `${d1}-${d2}-${d3} = ${tong} (${ket_qua})`,
+              md5
+            };
+            console.log(`[🎲 ${logTime()}] Phiên trước: ${sid} ➜ ${d1}-${d2}-${d3} = ${tong} (${ket_qua})`);
+            console.log(`           ➜ MD5: ${md5}`);
+            saveDataToFile();
+          }
+        }
+      }
+    } catch (e) {
+      console.log(`[‼️ ${logTime()}] Lỗi xử lý tin:`, e.message);
+    }
+  });
+
+  ws.on('close', (code, reason) => {
+    console.log(`[❌ ${logTime()}] Mất kết nối: ${code} | ${reason}`);
+    setTimeout(connectWS, 5000);
+  });
+
+  ws.on('error', (err) => {
+    console.log(`[‼️ ${logTime()}] WS lỗi:`, err.message);
+  });
+}
+
+// HTTP server cho /taixiu
+http.createServer((req, res) => {
+  if (req.url === '/taixiu') {
+    fs.readFile(path.join(__dirname, 'data.json'), (err, data) => {
+      if (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'Không thể đọc data.json' }));
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(data);
+    });
+  } else {
+    res.writeHead(404);
+    res.end('404 Not Found');
+  }
+}).listen(process.env.PORT || 8080, () => {
+  console.log(`[🌐] Server đang chạy tại http://localhost:${process.env.PORT || 8080}/taixiu`);
 });
 
-app.listen(PORT, () => {
-    console.log(`[🌐] API chạy tại http://localhost:${PORT}`);
-});
+connectWS();
