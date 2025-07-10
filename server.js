@@ -1,157 +1,124 @@
-const WebSocket = require("ws");
-const express = require("express");
-const app = express();
-const PORT = process.env.PORT || 8282;
+const WebSocket = require('ws');
+const express = require('express');
+const cors = require('cors');
 
-const WS_URL = "wss://mynygwais.hytsocesk.com/websocket";
-const accessToken = "1-17d1b52f17591f581fc8cd9102a28647";
-const ID = "binhtool90";
+const app = express();
+app.use(cors());
+const PORT = process.env.PORT || 5000;
 
 let ws;
-let lastPingTime = Date.now();
-let pingCounter = 1;
-let lastResults = [];
-let currentData = {
-  id: ID,
-  time: null,
-  phien_truoc: {},
-  phien_ke_tiep: {},
-  pattern: "",
-  du_doan: ""
-};
+let patternHistory = [];
+let currentSid = null;
+let currentData = null;
 
-function timestamp() {
-  return new Date().toLocaleTimeString("vi-VN", { hour12: false });
-}
+const processedSid = new Set();
+const processedGbb = new Set();
 
-function predictFromMD5(md5) {
-  if (!md5 || typeof md5 !== "string") return "Không rõ";
-  const char = md5[0].toLowerCase();
-  const num = parseInt(char, 16);
-  return isNaN(num) ? "Không rõ" : (num % 2 === 0 ? "Xỉu" : "Tài");
+const messagesToSend = [
+  [1, "MiniGame", "", "", {
+    agentId: "1",
+    accessToken: "1-17d1b52f17591f581fc8cd9102a28647",
+    reconnect: false
+  }],
+  [6, "MiniGame", "lobbyPlugin", { cmd: 10001 }],
+  [6, "MiniGame", "taixiuPlugin", { cmd: 1005 }],
+  [6, "MiniGame", "taixiuKCBPlugin", { cmd: 2001 }]
+];
+
+function simpleAIDuDoan(pattern) {
+  if (pattern.length < 6) return "Đợi thêm dữ liệu...";
+  let tai = 0, xiu = 0;
+  for (let i = 0; i < pattern.length; i++) {
+    if (pattern[i] === "T") tai++;
+    else if (pattern[i] === "X") xiu++;
+  }
+  return tai > xiu ? "Tài" : tai < xiu ? "Xỉu" : "Ngẫu nhiên";
 }
 
 function connectWebSocket() {
-  ws = new WebSocket(WS_URL, {
+  ws = new WebSocket("wss://mynygwais.hytsocesk.com/websocket", {
     headers: {
       "User-Agent": "Mozilla/5.0",
-      Origin: "https://i.hit.club",
-      Host: "mynygwais.hytsocesk.com"
+      Origin: "https://1.hit.club"
     }
   });
 
-  ws.on("open", () => {
-    console.log(`[✅ ${timestamp()}] WebSocket đã kết nối`);
-    lastPingTime = Date.now();
+  ws.on('open', () => {
+    console.log("[OK] WebSocket đã kết nối");
+    messagesToSend.forEach((msg, i) => {
+      setTimeout(() => ws.send(JSON.stringify(msg)), i * 400);
+    });
 
-    ws.send(JSON.stringify([
-      1, "MiniGame", "", "", {
-        agentId: "1",
-        accessToken,
-        reconnect: false
-      }
-    ]));
-
-    // Gửi cmd 2001 lần đầu sau 1s
-    setTimeout(() => {
-      ws.send(JSON.stringify([
-        6, "MiniGame", "taixiuKCBPlugin", { cmd: 2001 }
-      ]));
-    }, 1000);
-
-    autoKeepAlive();
+    let i = 1;
+    setInterval(() => {
+      ws.send(JSON.stringify(["7", "MiniGame", "1", i++]));
+    }, 10000);
   });
 
-  ws.on("message", (msg) => {
-    lastPingTime = Date.now();
-
+  ws.on('message', (msg) => {
     try {
       const data = JSON.parse(msg);
-      if (!Array.isArray(data) || data[0] !== 5 || typeof data[1] !== "object") return;
-      const d = data[1].d;
-      if (!d || typeof d.cmd !== "number") return;
+      if (!Array.isArray(data) || typeof data[1] !== 'object') return;
 
-      const { cmd, sid, md5 } = d;
+      const cmd = data[1].cmd;
+      const sid = data[1].sid;
+      const gbb = data[1].gBB;
 
-      if (cmd === 2005) {
-        currentData.phien_ke_tiep = { sid, md5 };
-        console.log(`[⏭️ ${timestamp()}] Phiên kế tiếp: ${sid} | MD5: ${md5}`);
+      // In mã phiên
+      if ((cmd === 1002 || cmd === 1008) && sid && !processedSid.has(sid)) {
+        currentSid = sid;
+        processedSid.add(sid);
       }
 
-      if (cmd === 2006 && d.d1 !== undefined) {
-        const { d1, d2, d3 } = d;
+      // In kết quả
+      if ((cmd === 1003 || cmd === 1004) && data[1].d1 && data[1].d2 && data[1].d3 && !processedGbb.has(gbb)) {
+        processedGbb.add(gbb);
+        const { d1, d2, d3 } = data[1];
         const total = d1 + d2 + d3;
-        const result = total >= 11 ? "Tài" : "Xỉu";
+        const kq = total > 10 ? "Tài" : "Xỉu";
 
-        lastResults.push(result === "Tài" ? "t" : "x");
-        if (lastResults.length > 10) lastResults.shift();
+        patternHistory.push(kq[0]);
+        if (patternHistory.length > 10) patternHistory.shift();
 
-        const pattern = lastResults.join("");
-        const du_doan = predictFromMD5(md5);
+        const pattern = patternHistory.join("");
+        const duDoan = simpleAIDuDoan(patternHistory);
 
-        currentData.phien_truoc = {
-          sid,
-          ket_qua: `${d1}-${d2}-${d3} = ${total} (${result})`,
-          md5
+        const output = {
+          id: "binhtool90",
+          sid: currentSid,
+          ket_qua: `${d1}-${d2}-${d3} = ${total} (${kq})`,
+          pattern: pattern,
+          du_doan_tiep_theo: duDoan
         };
-        currentData.pattern = pattern;
-        currentData.du_doan = du_doan;
-        currentData.time = timestamp();
 
-        console.log(`[🎲 ${timestamp()}] Phiên ${sid}: ${d1}-${d2}-${d3} = ${total} ➜ ${result}`);
-        console.log(`           ➜ MD5: ${md5} | Dự đoán: ${du_doan} | Pattern: ${pattern}`);
+        currentData = output;
+        console.log(output);
       }
-    } catch (err) {
-      console.log("[‼️] Lỗi xử lý:", err.message);
+    } catch (e) {
+      console.log("[Lỗi]", e.message);
     }
   });
 
-  ws.on("close", () => {
-    console.log(`[❌ ${timestamp()}] Mất kết nối WebSocket. Đang reconnect...`);
-    reconnectWebSocket();
+  ws.on('close', () => {
+    console.log("[Đóng] Mất kết nối, đang kết nối lại...");
+    setTimeout(connectWebSocket, 2000);
   });
 
-  ws.on("error", (err) => {
-    console.log(`[‼️] WebSocket lỗi:`, err.message);
+  ws.on('error', err => {
+    console.log("[Lỗi WebSocket]", err.message);
   });
 }
 
-// 🧠 Hàm tự động reconnect
-function reconnectWebSocket() {
-  try { ws.terminate(); } catch (e) {}
-  setTimeout(connectWebSocket, 3000);
-}
-
-// ✅ Gửi ping "7" + gọi lại cmd:2001 định kỳ
-function autoKeepAlive() {
-  setInterval(() => {
-    try {
-      ws.send(JSON.stringify(["7", "MiniGame", "1", pingCounter++]));
-      ws.send(JSON.stringify([
-        6, "MiniGame", "taixiuKCBPlugin", { cmd: 2001 }
-      ]));
-    } catch (e) {}
-  }, 10000); // mỗi 10s
-}
-
-// ✅ Kiểm tra zombie socket (im lặng > 30s thì reconnect)
-setInterval(() => {
-  const now = Date.now();
-  const diff = now - lastPingTime;
-  if (diff > 30000) {
-    console.log(`[⛔] Không phản hồi trong ${diff}ms. Reconnect...`);
-    reconnectWebSocket();
-  }
-}, 15000);
-
-// REST API
-app.get("/data", (req, res) => {
-  res.json(currentData);
+// API trả dữ liệu JSON
+app.get('/taixiu', (req, res) => {
+  res.json(currentData || { message: "Đang chờ dữ liệu..." });
 });
-app.get("/", (req, res) => {
-  res.send("🎲 Tool Tài Xỉu WebSocket - by binhtool90 đang chạy...");
+
+app.get('/', (req, res) => {
+  res.send("OK - /taixiu để xem JSON");
 });
+
 app.listen(PORT, () => {
-  console.log(`[🌐] Server đang chạy tại http://localhost:${PORT}`);
+  console.log(`[HTTP] Server chạy tại http://localhost:${PORT}`);
   connectWebSocket();
 });
