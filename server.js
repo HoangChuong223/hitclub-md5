@@ -4,10 +4,11 @@ const app = express();
 const PORT = process.env.PORT || 5050;
 
 const WS_URL = "wss://mynygwais.hytsocesk.com/websocket";
-const accessToken = "1-17d1b52f17591f581fc8cd9102a28647";
+const accessToken = "1-17d1b52f17591f581fc8cd9102a28647"; // thay token nếu cần
 const ID = "binhtool90";
 
 let ws;
+let reconnectAttempts = 0;
 let lastPingTime = Date.now();
 let pingCounter = 1;
 let lastResults = [];
@@ -34,13 +35,16 @@ function predictFromMD5(md5) {
 function connectWebSocket() {
   ws = new WebSocket(WS_URL, {
     headers: {
-      "User-Agent": "Mozilla/5.0",
-      Origin: "https://i.hit.club",
-      Host: "mynygwais.hytsocesk.com"
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+      "Origin": "https://i.hit.club",
+      "Host": "mynygwais.hytsocesk.com",
+      "Referer": "https://i.hit.club/",
+      "Sec-WebSocket-Protocol": "protocol7"
     }
   });
 
   ws.on("open", () => {
+    reconnectAttempts = 0;
     console.log(`[✅ ${timestamp()}] WebSocket đã kết nối`);
     lastPingTime = Date.now();
 
@@ -52,12 +56,11 @@ function connectWebSocket() {
       }
     ]));
 
-    // Gửi cmd 2001 lần đầu sau 1s
     setTimeout(() => {
       ws.send(JSON.stringify([
         6, "MiniGame", "taixiuKCBPlugin", { cmd: 2001 }
       ]));
-    }, 1000);
+    }, 2000);
 
     autoKeepAlive();
   });
@@ -106,8 +109,8 @@ function connectWebSocket() {
     }
   });
 
-  ws.on("close", () => {
-    console.log(`[❌ ${timestamp()}] Mất kết nối WebSocket. Đang reconnect...`);
+  ws.on("close", (code, reason) => {
+    console.log(`[❌ ${timestamp()}] WebSocket đóng. Mã: ${code}, Lý do: ${reason.toString()}`);
     reconnectWebSocket();
   });
 
@@ -116,13 +119,14 @@ function connectWebSocket() {
   });
 }
 
-// 🧠 Hàm tự động reconnect
 function reconnectWebSocket() {
   try { ws.terminate(); } catch (e) {}
-  setTimeout(connectWebSocket, 3000);
+  reconnectAttempts++;
+  const delay = Math.min(10000, 1000 * reconnectAttempts); // tăng dần delay
+  console.log(`[🔁] Reconnect lần ${reconnectAttempts}, thử lại sau ${delay / 1000}s...`);
+  setTimeout(connectWebSocket, delay);
 }
 
-// ✅ Gửi ping "7" + gọi lại cmd:2001 định kỳ
 function autoKeepAlive() {
   setInterval(() => {
     try {
@@ -131,15 +135,14 @@ function autoKeepAlive() {
         6, "MiniGame", "taixiuKCBPlugin", { cmd: 2001 }
       ]));
     } catch (e) {}
-  }, 10000); // mỗi 10s
+  }, 10000);
 }
 
-// ✅ Kiểm tra zombie socket (im lặng > 30s thì reconnect)
 setInterval(() => {
   const now = Date.now();
   const diff = now - lastPingTime;
   if (diff > 30000) {
-    console.log(`[⛔] Không phản hồi trong ${diff}ms. Reconnect...`);
+    console.log(`[⛔] Không phản hồi trong ${diff}ms. Đang reconnect...`);
     reconnectWebSocket();
   }
 }, 15000);
@@ -152,6 +155,6 @@ app.get("/", (req, res) => {
   res.send("🎲 Tool Tài Xỉu WebSocket - by binhtool90 đang chạy...");
 });
 app.listen(PORT, () => {
-  console.log(`[🌐] Server đang chạy tại http://localhost:${PORT}`);
+  console.log(`[🌐] Server chạy tại http://localhost:${PORT}`);
   connectWebSocket();
 });
