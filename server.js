@@ -24,7 +24,7 @@ function connectWebSocket() {
             "",
             {
                 agentId: "1",
-                accessToken: "1-17d1b52f17591f581fc8cd9102a28647",
+                accessToken: "1-bbaf7797f7d504f6ebd2979af2b35fac",
                 reconnect: false
             }
         ];
