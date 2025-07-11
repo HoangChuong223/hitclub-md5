@@ -4,7 +4,7 @@ const app = express();
 const PORT = process.env.PORT || 5050;
 
 const WS_URL = "wss://mynygwais.hytsocesk.com/websocket";
-const accessToken = "1-17d1b52f17591f581fc8cd9102a28647"; // thay token nếu cần
+const accessToken = "1-17d1b52f17591f581fc8cd9102a28647"; // 🔄 Token: đổi tại đây nếu cần
 const ID = "binhtool90";
 
 let ws;
@@ -39,7 +39,9 @@ function connectWebSocket() {
       "Origin": "https://i.hit.club",
       "Host": "mynygwais.hytsocesk.com",
       "Referer": "https://i.hit.club/",
-      "Sec-WebSocket-Protocol": "protocol7"
+      "Sec-WebSocket-Protocol": "protocol7",
+      "Upgrade": "websocket",
+      "Connection": "Upgrade"
     }
   });
 
@@ -48,26 +50,29 @@ function connectWebSocket() {
     console.log(`[✅ ${timestamp()}] WebSocket đã kết nối`);
     lastPingTime = Date.now();
 
-    ws.send(JSON.stringify([
-      1, "MiniGame", "", "", {
-        agentId: "1",
-        accessToken,
-        reconnect: false
-      }
-    ]));
-
+    // Gửi handshake sau 1 giây
     setTimeout(() => {
       ws.send(JSON.stringify([
-        6, "MiniGame", "taixiuKCBPlugin", { cmd: 2001 }
+        1, "MiniGame", "", "", {
+          agentId: "1",
+          accessToken,
+          reconnect: false
+        }
       ]));
-    }, 2000);
+
+      // Gửi cmd:2001 sau thêm 0.5 giây
+      setTimeout(() => {
+        ws.send(JSON.stringify([
+          6, "MiniGame", "taixiuKCBPlugin", { cmd: 2001 }
+        ]));
+      }, 500);
+    }, 1000);
 
     autoKeepAlive();
   });
 
   ws.on("message", (msg) => {
     lastPingTime = Date.now();
-
     try {
       const data = JSON.parse(msg);
       if (!Array.isArray(data) || data[0] !== 5 || typeof data[1] !== "object") return;
@@ -110,7 +115,7 @@ function connectWebSocket() {
   });
 
   ws.on("close", (code, reason) => {
-    console.log(`[❌ ${timestamp()}] WebSocket đóng. Mã: ${code}, Lý do: ${reason.toString()}`);
+    console.log(`[❌ ${timestamp()}] WebSocket đóng. Mã: ${code}, Lý do: ${reason.toString() || "(Không rõ)"}`);
     reconnectWebSocket();
   });
 
@@ -122,7 +127,7 @@ function connectWebSocket() {
 function reconnectWebSocket() {
   try { ws.terminate(); } catch (e) {}
   reconnectAttempts++;
-  const delay = Math.min(10000, 1000 * reconnectAttempts); // tăng dần delay
+  const delay = Math.min(15000, 1000 * reconnectAttempts); // delay tối đa 15s
   console.log(`[🔁] Reconnect lần ${reconnectAttempts}, thử lại sau ${delay / 1000}s...`);
   setTimeout(connectWebSocket, delay);
 }
@@ -135,7 +140,7 @@ function autoKeepAlive() {
         6, "MiniGame", "taixiuKCBPlugin", { cmd: 2001 }
       ]));
     } catch (e) {}
-  }, 10000);
+  }, 10000); // mỗi 10 giây
 }
 
 setInterval(() => {
